@@ -4,6 +4,7 @@ using BepInEx.Logging;
 using ElevatorSymphony.Patches;
 using HarmonyLib;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -18,7 +19,7 @@ namespace ElevatorSymphony
     {
         internal const string GUID = "com.sk737.elevatorsymphony";
         internal const string NAME = "ElevatorSymphony";
-        internal const string VERSION = "1.0.0";
+        internal const string VERSION = "1.1.0";
 
         internal static ManualLogSource LoggerInstance { get; private set; }
         internal static Plugin Instance { get; private set; }
@@ -30,16 +31,20 @@ namespace ElevatorSymphony
         public static new Config Config { get; private set; }
         private Harmony mHarmony = new Harmony(GUID);
 
+        private int mTotalWeight;
         private void Awake()
         {
-            Config = new Config(base.Config);
             Instance = this;
             LoggerInstance = Logger;
 
             if (Directory.Exists(ExecutingPath + "/Music")) {
-                mClipFiles = Directory.GetFiles(ExecutingPath + "/Music").OrderBy(f => f).ToArray();
+                mClipFiles = [.. Directory.GetFiles(ExecutingPath + "/Music").OrderBy(f => f)];
             }
-
+            Config = new Config(base.Config, mClipFiles);
+            foreach (ConfigEntry<int> e in Config.SongWeights) {
+                mTotalWeight += e.Value;
+            }
+            
             mHarmony.PatchAll(typeof(RoundManagerPatch));
             mHarmony.PatchAll(typeof(StartStartOfRoundPatch));
             mHarmony.PatchAll(typeof(Plugin));
@@ -57,6 +62,9 @@ namespace ElevatorSymphony
                     return AudioType.WAV;
             }
         }
+
+
+
 
         public async Task LoadClip(string path, Action<AudioClip> callback) {
             AudioType type = GetAudioType(Path.GetExtension(path));
@@ -81,9 +89,26 @@ namespace ElevatorSymphony
         }
 
         public void LoadNewAudioFile() {
-            int selected = Random.Next(Config.IncludeDefaultElevatorMusic.Value ? -1 : 0, mClipFiles.Length);
-            if (selected >= 0 && mClipFiles.Length > 0) {
-                LoadClip(mClipFiles[selected], SetElevator);
+            //int selected = Random.Next(Config.IncludeDefaultElevatorMusic.Value ? -1 : 0, mClipFiles.Length);
+
+            int selectedWeight = Random.Next(0, mTotalWeight);
+            int selectedSong = -1;
+            int prevMax = 0;
+
+            for (int i = 0; i < Config.SongWeights.Count; i++) {
+                int min = prevMax;
+                prevMax += Config.SongWeights[i].Value;
+
+                if (selectedWeight > min && selectedWeight < prevMax) {
+                    selectedSong = (i-1);
+                    break;
+                }
+            }
+
+
+
+            if (selectedSong >= 0 && mClipFiles.Length > 0) {
+                LoadClip(mClipFiles[selectedSong], SetElevator);
             }
         }
 
@@ -96,15 +121,23 @@ namespace ElevatorSymphony
     }
 
     public class Config {
-        public static ConfigEntry<bool> IncludeDefaultElevatorMusic;
-
-        public Config(ConfigFile config) {
-            IncludeDefaultElevatorMusic = config.Bind(
-                "General",
-                "IncludeDefaultElevatorMusic",
-                true,
-                "Allows the randomizer to pick the games elevator music"
-                );
+        public static List<ConfigEntry<int>> SongWeights = [];
+        public Config(ConfigFile config, string[] clipFiles) {
+            SongWeights.Add(
+                config.Bind(
+                    "General",
+                    "Default chance",
+                    100,
+                    "Chance of the base games song being picked by the randomizer. The higher the value the greater the chance it is picked."));
+            foreach (string c in clipFiles) {
+                string name = Path.GetFileNameWithoutExtension(c);
+                SongWeights.Add(config.Bind(
+                    "General",
+                    $"{name} chance",
+                    100,
+                    $"Chance of {name} being picked by the randomizer. The higher the value the greater the chance it is picked."
+                    ));
+            }
         }
     }
 }
